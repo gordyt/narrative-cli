@@ -1,0 +1,566 @@
+#!/bin/bash
+# Experiments with Narrative API
+# NOTE: You need to log in via the web interface at this URL:
+#         https://narrativeapp.com
+#       Use the web inspector to grab the token part from
+#       the Authrization header and replace the value for
+#       `TOKEN` below.
+# Usage: Run this script with the -h or --help option.
+# Version Histtory:
+#   0.1.0, 20160530 - Initial release
+# 
+
+VERSION='0.1.0, 20160530'
+
+# ------------------------------------------------------------------------------ 
+# The following are populated by parsing the command-line args:
+# ------------------------------------------------------------------------------ 
+# -d|--date <date>
+DATE='today'
+# -f|--from <from-time>
+FROM_TIME='00:00:00'
+# -t|--to <to-time>
+TO_TIME='23:59:59'
+# -m|--moment <moment-id>
+MOMENT=''
+# From one of these mutually-exclusing flags:
+#   -g|--get, -d|--delete, -l|--list
+# Possible values: list|get|delete
+OPERATION='list'
+# -i|--items <item-list>
+ITEMS='moments'
+
+# ------------------------------------------------------------------------------ 
+# These are used to contruct curl requests against the server
+# ------------------------------------------------------------------------------ 
+TOKEN_FILE=~/.narrativerc
+TOKEN=$(<${TOKEN_FILE})
+if [ -z $TOKEN ]
+then
+    echo "Please use the web inspector in your browser to examine the Authorization"
+    echo "header afer you log into the https://narrativeapp.com/timeline/ site."
+    echo "Copy the Bearer TOKEN value and put it in the '${TOKEN_FILE}' file."
+    echo "There should be no extra whitespace in the file."
+    exit 1
+fi
+API='https://narrativeapp.com/api/v2/'
+AUTH="Authorization: Bearer $TOKEN"
+DNT='DNT: 1' 
+AE='Accept-Encoding: gzip, deflate, sdch, br'
+AL='Accept-Language: en-US,en;q=0.8'
+UA='User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.63 Safari/537.36'
+ACCEPT='Accept: application/json, text/plain, */*'
+REFERRER='Referer: https://narrativeapp.com/groups/public/'
+RW='X-Requested-With: XMLHttpRequest' 
+CONN='Connection: keep-alive'
+
+
+# ------------------------------------------------------------------------------ 
+# Helpers
+# ------------------------------------------------------------------------------ 
+
+# Command used to format the JSON output of the API
+JSON='python -m json.tool'
+
+# Used to parse dates returned by the server
+IN_DATE_FMT='%Y-%m-%dT%H:%M:%S-05:00'
+
+# Used by the convert_date function to convert
+# the integer day-of-the-week to a short abbreviation
+declare -a NUM_TO_DAY
+NUM_TO_DAY[1]='mo'
+NUM_TO_DAY[2]='tu'
+NUM_TO_DAY[3]='we'
+NUM_TO_DAY[4]='th'
+NUM_TO_DAY[5]='fr'
+NUM_TO_DAY[6]='sa'
+NUM_TO_DAY[7]='su'
+
+# Used by the do_operation function to validate
+# the function or functions to perform
+declare -a VALID_FUNCS
+VALID_FUNCS[0]='list_moments'
+VALID_FUNCS[1]='list_photos'
+VALID_FUNCS[2]='list_videos'
+VALID_FUNCS[3]='delete_moments'
+VALID_FUNCS[4]='delete_photos'
+VALID_FUNCS[5]='delete_videos'
+VALID_FUNCS[6]='get_photos'
+VALID_FUNCS[7]='get_videos'
+
+
+
+# echos a time-stamped message to stderr
+function log {
+    msg="[`date`] $1"
+    >&2 echo "$msg"
+}
+
+# Convert date string from 2016-05-28T13:22:51-05:00
+# to yyyymmdd_da_hhmmss
+function convert_date {
+    dIn=$1
+    yrPrt=$(date -j -f "$IN_DATE_FMT" "$dIn" +'%Y%m%d')
+    wkNum=$(date -j -f "$IN_DATE_FMT" "$dIn" +'%u')
+    wkDay=${NUM_TO_DAY[$wkNum]}
+    tiPrt=$(date -j -f "$IN_DATE_FMT" "$dIn" +'%H%M%S')
+    echo "${yrPrt}_${wkDay}_${tiPrt}"
+}
+
+# Convert date string from 2016-05-28T13:22:51-05:00
+# to yyyy-mm-dd (Day)
+function date_to_day_folder {
+    dIn=$1
+    echo $(date -j -f "$IN_DATE_FMT" "$dIn" +'%Y-%m-%d (%A)')
+}
+
+# Perform a DELETE request to the server
+function delete {
+    URL="${API}${1}"
+    resp=$(curl $URL \
+        -f -s -S -X DELETE \
+        -H "$AUTH" -H "$DNT" -H "$AE" -H "$AL" -H "$UA" -H "$ACCEPT" -H "$REFERRER" \
+        -H "$RW" -H "$CONN" 2>&1)
+    rc=$?
+    if [ $rc -gt 0 ]
+    then
+        log "delete: error=$resp"
+    fi
+}
+
+# Perform a GET request to the server
+function get {
+    URL="${API}${1}"
+    resp=$(curl $URL \
+        -f -s -S \
+        -H "$AUTH" -H "$DNT" -H "$AE" -H "$AL" -H "$UA" -H "$ACCEPT" -H "$REFERRER" \
+        -H "$RW" -H "$CONN" --compressed 2>&1)
+    rc=$?
+    if [ $rc -gt 0 ]
+    then
+        log "get: error=$resp"
+        echo ""
+    else
+        echo "$resp"
+    fi
+}
+
+# Ensure specified folder exists. Create if necessary
+function check_dir {
+    dp="$1"
+    if [ ! -d "$dp" ]
+    then
+        echo "check_dir: creating dir: '$dp'"
+        mkdir -p "$dp"
+    fi
+}
+
+# ------------------------------------------------------------------------------  
+# Operations on moments
+# ------------------------------------------------------------------------------  
+
+function delete_moments {
+    echo "TODO - Delete moments"
+}
+
+function list_moments {
+    log "list_moments..."
+    resp=$(get "moments/?lite=&directed=&limit=9999" | $JSON | awk '
+      BEGIN {inR=0;inM=0;}
+      /"results"/ {inR=1;}
+      /{/ {if (inR==1) {inM=1;}}
+      /"end_timestamp_local"/ {etl=$2; gsub(/[";,]/, "", etl);}
+      /"start_timestamp_local"/ {stl=$2; gsub(/[";,]/, "", stl);}
+      /"uuid"/ {uuid=$2; gsub(/[";,]/, "", uuid);}
+      /}/ {if (inM==1) {printf("%s,%s,%s\n", uuid, stl, etl);}}')
+
+    echo "Moment ID                        Start date/time    End date/time     "
+    echo "-------------------------------- ------------------ ------------------"
+    for line in ${resp[@]}
+    do
+        l=($(echo "$line" | tr ',' ' '))
+        uuid="${l[0]}"
+        stl=$(convert_date "${l[1]}")
+        etl=$(convert_date "${l[2]}")
+        echo "${uuid} ${stl} ${etl}"
+    done
+}
+
+
+# ------------------------------------------------------------------------------  
+# Operations on photos
+# ------------------------------------------------------------------------------  
+
+
+function delete_photos {
+    log "delete_photos..."
+    resp=$(x_list_photos)
+    for line in ${resp[@]}
+    do
+        l=($(echo "$line" | tr ',' ' '))
+        uuid="${l[0]}"
+        ta="${l[1]}"
+        log "delete_photos: deleting photo, uuid='${uuid}', taken at='${ta}'"
+        path="photos/$uuid/"
+        delete $path
+    done
+}
+
+function get_photos {
+    log "get_photos..."
+    resp=$(x_list_photos)
+    for line in ${resp[@]}
+    do
+        l=($(echo "$line" | tr ',' ' '))
+        uuid="${l[0]}"
+        ta="${l[1]}"
+        fl=$(date_to_day_folder "$ta")
+        fn=$(convert_date "$ta")
+        fp="${fl}/${fn}.jpg"
+        url="${l[2]}"
+        check_dir "$fl"
+        if [ -f "$fp" ]
+        then
+            log "get_photos: photo already downloaded, uuid='${uuid}', path='${fp}'"
+        else
+            log "get_photos: downloading photo, uuid='${uuid}', path='${fp}'"
+            curl -f -s -S "${url}" > "${fp}" 2>/tmp/error.get_photos
+            rc=$?
+            if [ $rc -gt 0 ]
+            then
+                err=$(</tmp/error.get_photos)
+                log "get_photos: error=$err"
+            fi
+        fi
+    done
+}
+
+function list_photos {
+    log "list_photos..."
+    echo "Photo ID                         Taken at date/time"
+    echo "-------------------------------- ------------------"
+    resp=$(x_list_photos)
+    for line in ${resp[@]}
+    do
+        l=($(echo "$line" | tr ',' ' '))
+        uuid="${l[0]}"
+        tal=$(convert_date "${l[1]}")
+        echo "${uuid} ${tal}"
+    done
+}
+
+function x_list_photos {
+    resp=$(get "photos/?limit=9999" | $JSON | awk '
+      BEGIN {renders=0; faces=0; uuid=0; tal=0; type=0; hd=0; url=0;}
+      /"renders"/ {renders=1;}
+      /"faces"/ {faces=1;}
+      /"g1_hd"/ {hd=1;}
+      /"type"/ {type=$2; gsub(/[";,]/, "", type);}
+      /"taken_at_local"/ {tal=$2; gsub(/[";,]/, "", tal);}
+      /"uuid"/ {uuid=$2; gsub(/[";,]/, "", uuid);}
+      /"url"/ {if (hd == 1 && url == 0) {url=$2; gsub(/[";,]/, "", url);}}
+      /}/ {if (renders != 0 && faces != 0 && uuid != 0 && tal != 0 && hd != 0 && type == "photo") {
+              printf("%s,%s,%s\n", uuid, tal, url);
+              renders=0; faces=0; uuid=0; tal=0; type=0; hd=0; url=0;}}')
+    
+    for line in ${resp[@]}
+    do
+        l=($(echo "$line" | tr ',' ' '))
+        uuid="${l[0]}"
+        tal="${l[1]}"
+        url="${l[2]}"
+        echo "${uuid},${tal},${url}"
+    done
+}
+
+
+# ------------------------------------------------------------------------------  
+# Operations on videos
+# ------------------------------------------------------------------------------  
+
+function delete_videos {
+    log "delete_videos..."
+    resp=$(x_list_videos)
+    for line in ${resp[@]}
+    do
+        l=($(echo "$line" | tr ',' ' '))
+        uuid="${l[0]}"
+        ta="${l[1]}"
+        log "delete_videos: deleting video, uuid='${uuid}', shot at='${ta}'"
+        path="videos/$uuid/"
+        delete $path
+    done
+}
+
+function get_videos {
+    log "get_videos..."
+    resp=$(x_list_videos)
+    for line in ${resp[@]}
+    do
+        l=($(echo "$line" | tr ',' ' '))
+        uuid="${l[0]}"
+        ta="${l[1]}"
+        fl=$(date_to_day_folder "$ta")
+        fn=$(convert_date "$ta")
+        fp="${fl}/${fn}.mp4"
+        url="${l[2]}"
+        check_dir "$fl"
+        if [ -f "$fp" ]
+        then
+            log "get_videos: video already downloaded, uuid='${uuid}', path='${fp}'"
+        else
+            log "get_videos: downloading videos, uuid='${uuid}', path='${fp}'"
+            curl -f -s -S "${url}" > "${fp}" 2>/tmp/error.get_videos
+            rc=$?
+            if [ $rc -gt 0 ]
+            then
+                err=$(</tmp/error.get_videos)
+                log "get_videos: error=$err"
+            fi
+        fi
+    done
+}
+
+function list_videos {
+    log "list_videos..."
+    echo "Video ID                         Start at date/time"
+    echo "-------------------------------- ------------------"
+    resp=$(x_list_videos)
+    for line in ${resp[@]}
+    do
+        l=($(echo "$line" | tr ',' ' '))
+        uuid="${l[0]}"
+        stl=$(convert_date "${l[1]}")
+        echo "${uuid} ${stl}"
+    done
+}
+
+function x_list_videos {
+    resp=$(get "videos/?limit=9999" | $JSON | awk '
+      BEGIN {in1080p=0; in720p=0; in480p=0; res=0; stl=0; uuid=0; url=0; type=0;}
+      /"g1_1080p"/ { in1080p=1; }
+      /"g1_720p"/ { in720p=1; }
+      /"g1_480p"/ { in480p=1; }
+      /"type"/ {type=$2; gsub(/[";,]/, "", type);}
+      /"start_timestamp_local"/ {stl=$2; gsub(/[";,]/, "", stl);}
+      /"url"/ {
+        if (in480p && url == 0) {
+          url=$2; gsub(/[";,]/, "", url);
+          res=1;
+        }
+        if (in720p && res < 2) {
+          url=$2; gsub(/[";,]/, "", url);
+          res=2;
+        }
+        if (in1080p && res < 3) {
+          url=$2; gsub(/[";,]/, "", url);
+          res=3;
+        }
+        if (url != 0) {
+          split(url, urlP, "/");
+          maxIdx=0;
+          for (idx in urlP) {
+              idxN = idx + 0;
+              if (idxN > maxIdx) {
+                  maxIdx = idxN;
+              }
+          }
+          fName = urlP[maxIdx];
+          split(fName, fNameP, ".");
+          uuid = fNameP[1];
+        }
+      }
+      /}/ {if (uuid != 0 && url != 0 && stl != 0 && type == "video") {
+             printf("%s,%s,%s\n", uuid, stl, url);
+             in1080p=0; in720p=0; in480p=0; res=0; stl=0; uuid=0; url=0; type=0;}}')
+      
+    for line in ${resp[@]}
+    do
+        l=($(echo "$line" | tr ',' ' '))
+        uuid="${l[0]}"
+        stl="${l[1]}"
+        url="${l[2]}"
+        echo "${uuid},${stl},${url}"
+    done
+}
+
+# ------------------------------------------------------------------------------  
+# Test functions
+# ------------------------------------------------------------------------------  
+
+
+# Get the API endpoint
+function get_api {
+    get '' | $JSON
+}
+
+function get_status {
+    get "status/" | $JSON
+}
+
+
+
+
+function get_moment {
+    momentId=$1
+    path="moments/$momentId/"
+    get $path | $JSON
+}
+
+function get_moment_photos {
+    momentId=$1
+    path="moments/$momentId/photos/"
+    get $path | $JSON
+}
+
+function get_photo {
+    photoId=$1
+    path="photos/$photoId/"
+    get $path | $JSON
+}
+
+function get_video {
+    videoId=$1
+    get "videos/$videoId/" | $JSON
+}
+
+function delete_photo {
+    photoId=$1
+    path="photos/$photoId/"
+    delete $path
+}
+
+function download_photo {
+    photoId=$1
+    eval `get_photo $photoId | awk 'BEGIN {f=0;} 
+      /"g1_hd"/ {f=1;} 
+      /"url"/ {if (f==1) {u=$2; gsub(/[";,]/, "", u); printf("url=%s;", u); f=0;}}
+      /"taken_at_local"/ {t=$2; gsub(/[";,]/, "", t); printf("dtim=%s", t);}'`
+    newD=$(convert_date "$dtim")
+    curl "$url" > "${newD}.jpg"
+}
+
+function download_video {
+    videoId=$1
+    eval `get_video $photoId | awk 'BEGIN {f=0;} 
+      /"g1_720p"/ {f=1;} 
+      /"url"/ {if (f==1) {u=$2; gsub(/[";,]/, "", u); printf("url=%s;", u); f=0;}}
+      /"start_timestamp_local"/ {t=$2; gsub(/[";,]/, "", t); printf("dtim=%s", t);}'`
+    newD=$(convert_date "$dtim")
+    curl "$url" > "${newD}.mp4"
+}
+
+function usage {
+cat << EOF
+$0, Version $VERSION
+
+Usage: This script will list or delete moments|photos|videos
+       or get (download) photos|videos from the Narrative
+       server.
+
+       When getting photos|videos, they will be stored
+       in the current directory into a new folder
+       with the following name: 'yyyy-mm-dd (Day)'.
+       Example: '2016-05-29 (Sunday)'.
+
+Arguments:
+
+  -d|--date   <date> - filter operations to 
+              moments|photos|videos on the specified date.
+              The default is 'today'.  <date>, if specified, 
+              must be of the following format: 'yyyy-mm-dd'.
+  -f|--from   <from-time> - filter operations 
+              to moments|photos|videos taken on/after the 
+              specified time. If not specified,
+              defaults to the selected date at '00:00:00'.
+              If specified, must be of the form 'hh:mm:ss'
+  -t|--to     <to-time> - filter operations
+              to moments|photos|videos taken on/before the
+              specified time. If not specified,
+              defaults to the selected date at '23:59:59'.
+              If specified, must be of the form 'hh:mm:ss'.
+  -g|--get    Get (download) photos|videos from
+              Narrative server
+  -d|--delete Delete moments|photos|videos from Narrative server
+  -l|--list   List moments|photos|videos on the Narrative server
+              This is the default operation.
+  -i|--items  <item-list> moments,photos,videos (default=moments)
+              what to list|get|delete
+              Can be a comma-separated list. Note: 'moments' can
+              only be listed or deleted.
+  -m|--moment <moment-id> - When getting, listing, or 
+              deleting photos, this filters by all
+              photos contained in the specified moment.
+              Valid only with '--items photos'.
+              When deleting moments, this specifies the moment
+              to delete.
+
+EOF
+exit 1
+}
+
+# Perform the specified operation
+function do_operation {
+    declare -a funcs
+    for item in $(echo "$ITEMS" | tr ',' '\n')
+    do
+        itemFunc="${OPERATION}_${item}"
+        if $(echo "${VALID_FUNCS[*]}" | grep -q -v "$itemFunc")
+        then
+            log "do_operation: Peforming a ${OPERATION} operation on ${item} is not supported"
+            exit 1
+        fi
+        funcs[${#funcs[@]}]="$itemFunc"
+    done
+    log "do_operation: funcs to perform = ${funcs[*]}"
+    for f in ${funcs[@]}
+    do
+        $f
+    done
+}
+
+while [[ $# > 0 ]]
+do
+    case $1 in
+	-d|--date)
+	DATE="$2"
+	shift
+        ;;
+	-f|--from)
+	FROM_TIME="$2"
+	shift
+        ;;
+	-t|--to)
+	TO_TIME="$2"
+	shift
+        ;;
+	-m|--moment)
+	MOMENT="$2"
+	shift
+        ;;
+	-i|--items)
+	ITEMS="$2"
+	shift
+        ;;
+        -d|--delete)
+        OPERATION='delete'
+        ;;
+        -g|--get)
+        OPERATION='get'
+        ;;
+        -l|--list)
+        OPERATION='list'
+        ;;
+        -h|--help)
+        usage
+        ;;
+        *)
+	log "Error: $1 is an unknown argument"
+	usage
+        ;;
+    esac
+    shift
+done
+
+do_operation
+
