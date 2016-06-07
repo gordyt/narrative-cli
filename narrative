@@ -88,12 +88,31 @@ VALID_FUNCS[5]='delete_videos'
 VALID_FUNCS[6]='get_photos'
 VALID_FUNCS[7]='get_videos'
 
-
-
 # echos a time-stamped message to stderr
 function log {
     msg="[`date`] $1"
     >&2 echo "$msg"
+}
+
+# Check to see if DATE is one of the supported constants (currently
+# only "today" and "yesterday".  If so, convert to yyyy-mm-dd.  If
+# not, ensure it is of the form yyyy-mm-dd.
+function check_date {
+	case "$DATE" in
+		today)
+			DATE=$(date -v "+0d" +'%Y-%m-%d')
+			;;
+		yesterday)
+			DATE=$(date -v "-1d" +'%Y-%m-%d')
+			;;
+		*)
+			echo "$DATE" | grep -E -q '\d{4}-\d{2}-\d{2}'
+			if [ $? -ne 0 ]
+			then
+				log "Error: --date must be one of the supported symbolic names or yyyy-mm-dd"		   
+				exit 1
+			fi
+    esac
 }
 
 # Convert date string from 2016-05-28T13:22:51-05:00
@@ -250,6 +269,10 @@ function list_photos {
 }
 
 function x_list_photos {
+	log "retrieving photos for date '$DATE'"
+	# NOTE: The API is not honoring this:
+	#       photos/?limit=9999&taken_at_local__gte=$DATE
+	# So will filter out response here.
     resp=$(get "photos/?limit=9999" | $JSON | awk '
       BEGIN {renders=0; faces=0; uuid=0; tal=0; type=0; hd=0; url=0;}
       /"renders"/ {renders=1;}
@@ -269,7 +292,11 @@ function x_list_photos {
         uuid="${l[0]}"
         tal="${l[1]}"
         url="${l[2]}"
-        echo "${uuid},${tal},${url}"
+		echo "$tal" | grep -q "$DATE"
+		if [ $? -eq 0 ]
+		then
+			echo "${uuid},${tal},${url}"
+		fi
     done
 }
 
@@ -380,7 +407,11 @@ function x_list_videos {
         uuid="${l[0]}"
         stl="${l[1]}"
         url="${l[2]}"
-        echo "${uuid},${stl},${url}"
+		echo "$stl" | grep -q "$DATE"
+		if [ $? -eq 0 ]
+		then
+			echo "${uuid},${stl},${url}"
+		fi
     done
 }
 
@@ -499,8 +530,8 @@ EOF
 exit 1
 }
 
-# Perform the specified operation
-function do_operation {
+# Perform the specified operations
+function do_operations {
     declare -a funcs
     for item in $(echo "$ITEMS" | tr ',' '\n')
     do
@@ -517,6 +548,11 @@ function do_operation {
     do
         $f
     done
+}
+
+# rudimentary argument checking
+function check_args {
+	check_date
 }
 
 while [[ $# > 0 ]]
@@ -562,5 +598,5 @@ do
     shift
 done
 
-do_operation
-
+check_args
+do_operations

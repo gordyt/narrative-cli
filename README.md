@@ -84,9 +84,10 @@ the following:
 * Get (download) *photos* and *videos*
 * Delete (from the cloud) *photos* and *videos*
 
-Currently none of the other filtering operations work.  Right now all
-of the listing, getting, and deleting operations work on *all*
-entities of the specified type or types, so use at your own risk.
+Date filtering works for *photos* and *videos*.  The filtering is done
+by the script, not by query parameters.  Experimentation showed that
+the query parameters were not being honored, at least not when curling
+the `.../photos/` or `.../vidoes/` endpoints.
 
 Listing and getting (downloading) are safe operations and do not
 remove anything from the cloud.  Photos and videos that are downloaded
